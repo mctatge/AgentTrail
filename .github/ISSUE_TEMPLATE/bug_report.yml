@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible issue using fabricated data only.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach real recordings, screenshots, documents, database files, credentials, or private paths.
+        For security/privacy vulnerabilities, use the private reporting link in SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit and macOS version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction using fabricated data
+      description: Describe steps, expected behavior, and observed behavior. Do not paste a raw session log.
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Enabled permissions and capture options
+      description: List settings in text; do not attach screenshots showing other apps or personal information.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This report contains no real recordings, credentials, personal data, or confidential material.
+          required: true

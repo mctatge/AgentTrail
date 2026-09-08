@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security or privacy vulnerability privately
+    url: https://github.com/mctatge/AgentTrail/security/advisories/new
+    about: Do not disclose sensitive information in a public issue.
