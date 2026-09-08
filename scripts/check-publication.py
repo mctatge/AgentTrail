@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -18,6 +19,10 @@ DIRECTORY_SUFFIXES = {
     "scripts": {".py", ".sh"},
     ".github": {".yml", ".yaml", ".md"},
 }
+REVIEWED_IMAGES = {
+    "docs/assets/timeline.jpg": "5a4f14bb0f695ffc66e1008bb0dfa57a384166d66410beacdee1d4a616c0792f",
+    "docs/assets/cursor-trail.jpg": "d094b2ec22268127a3178f7134e455ed3f62304df0cb5d01573ef997294f6d69",
+}
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
     "GitHub credential": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b"),
@@ -36,6 +41,16 @@ def check_blob(name, mode, data, deny_terms=()):
     location = pathlib.PurePosixPath(name)
     if mode not in {"100644", "100755"}:
         problems.append("symlink, submodule, or unsupported file mode")
+    if name in REVIEWED_IMAGES:
+        if mode != "100644":
+            problems.append("reviewed image must be a regular non-executable file")
+        if len(data) > 512 * 1024 or not data.startswith(b"\xff\xd8\xff") or not data.endswith(b"\xff\xd9"):
+            problems.append("unexpected reviewed image format or size")
+        if hashlib.sha256(data).hexdigest() != REVIEWED_IMAGES[name]:
+            problems.append("image differs from visually reviewed synthetic asset")
+        if any(term and term.casefold() in name.casefold() for term in deny_terms):
+            problems.append("private review term")
+        return problems
     allowed = name in ROOT_FILES or (
         len(location.parts) > 1
         and location.suffix in DIRECTORY_SUFFIXES.get(location.parts[0], set())
@@ -97,7 +112,7 @@ def main():
         for name, problems in failures:
             print(f"BLOCKED {name!r}: {', '.join(problems)}", file=sys.stderr)
         return 1
-    print(f"Publication check passed for {count} indexed source files. Manually review the staged diff; pattern checks cannot prove data anonymity or legal compliance.")
+    print(f"Publication check passed for {count} indexed files. Manually review the staged diff; pattern checks and reviewed image hashes cannot prove data anonymity or legal compliance.")
     return 0
 
 

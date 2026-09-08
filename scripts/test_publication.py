@@ -40,6 +40,23 @@ class PublicationTests(unittest.TestCase):
         for data in [b"\x00binary", b"SQLite format 3", b"\xff\xfe", b"a" * (512 * 1024 + 1)]:
             self.assertTrue(publication.check_blob("README.md", "100644", data))
 
+    def test_only_exact_reviewed_images_are_allowed(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for name in publication.REVIEWED_IMAGES:
+            with self.subTest(name=name):
+                data = (root / name).read_bytes()
+                self.assertEqual(publication.check_blob(name, "100644", data), [])
+                self.assertTrue(publication.check_blob(name, "100644", data + b"changed"))
+                self.assertTrue(publication.check_blob("docs/assets/unreviewed.jpg", "100644", data))
+                self.assertTrue(publication.check_blob(name, "100644", b"not an image"))
+                for mode in ["100755", "120000", "160000"]:
+                    self.assertTrue(publication.check_blob(name, mode, data))
+
+    def test_reviewed_images_still_check_private_path_terms(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        name = "docs/assets/timeline.jpg"
+        self.assertEqual(publication.check_blob(name, "100644", (root / name).read_bytes(), ["TIMELINE"]), ["private review term"])
+
     def test_private_terms_are_case_insensitive_and_not_echoed(self):
         self.assertEqual(publication.check_blob("README.md", "100644", b"PRIVATE EXAMPLE", ["private example"]), ["private review term"])
 

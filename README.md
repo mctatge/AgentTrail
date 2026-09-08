@@ -8,7 +8,11 @@ AgentTrail is a local macOS app that records keyboard and pointer inputs, sample
 
 Press Start, work in your apps, and finish the session. Inspect a shortcut or drag, follow it back to its source events, and keep bookmarks for moments worth reviewing.
 
-**Privacy warning:** this is an input recorder. Raw key codes can reveal typed content even with text capture disabled. Record your own authorized demonstrations using disposable data; never use it for covert monitoring. The repository contains source and synthetic test generators, not anyone's recordings. See [Privacy and responsible use](PRIVACY.md) before capturing or sharing data.
+![AgentTrail timeline showing a synthetic drag, Command-D shortcut, bookmark, and the shortcut's supporting event evidence.](docs/assets/timeline.jpg)
+
+*The native app displaying a synthetic demonstration—not a real recording. This example uses a spreadsheet; input recording works across apps.*
+
+**Privacy warning:** this is an input recorder. Raw key codes can reveal typed content even with text capture disabled. Record your own authorized demonstrations using disposable data; never use it for covert monitoring. The repository contains source, synthetic test generators, and reviewed synthetic-only UI screenshots, not anyone's recordings. See [Privacy and responsible use](PRIVACY.md) before capturing or sharing data.
 
 ## Quick start
 
@@ -37,6 +41,10 @@ Start with a short disposable test: type a phrase in another app, drag, pause, r
 ## Cursor trails
 
 Open a session and click **Cursor trail**, or select a movement/drag/click action and choose **View cursor trail** in its inspector. The coordinate map draws the recorded path, distinguishes movement from dragging, and marks mouse-button presses. Replay it at ½×, 1×, 2×, or 4×, scrub through time, or step between individual samples to inspect x/y coordinates, timestamps, and raw event IDs.
+
+![AgentTrail cursor trail showing a red vertical drag, a gray curved movement, button-down markers, playback controls, and coordinates linked to a raw event ID.](docs/assets/cursor-trail.jpg)
+
+*Synthetic cursor samples: movement in gray, dragging in red, and circles for button presses. The viewer links each sample to its coordinates, timestamp, and raw event ID.*
 
 The map preserves aspect ratio and negative coordinates. It fits the captured motion rather than placing the trail over an unregistered screenshot. Gaps, pause/resume boundaries, app switches, and idle intervals over two seconds break the path. Playback only visualizes recorded data; it never moves your actual pointer or operates an app. Longer recordings are split into navigable parts of up to 20,000 relevant records, without deleting or modifying raw events. Refresh loads newly committed samples during a recording.
 

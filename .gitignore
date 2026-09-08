@@ -38,3 +38,5 @@ frames/
 .mcp.json
 __pycache__/
 *.pyc
+!docs/assets/timeline.jpg
+!docs/assets/cursor-trail.jpg
