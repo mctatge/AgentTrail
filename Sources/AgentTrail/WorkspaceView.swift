@@ -56,9 +56,9 @@ struct WorkspaceView: View {
         .background(Studio.surface)
         .frame(minWidth: 980, minHeight: 650)
         .tint(Studio.signal)
-        .sheet(isPresented: $showingSetup) { SetupView(model: model) }
-        .sheet(isPresented: $showingAI) { AIView(model: model) }
-        .sheet(item: $cursorRequest) { request in CursorTrailView(store: model.store, request: request) }
+        .sheet(isPresented: $showingSetup) { SetupView(model: model).background(NonblockingSheet()) }
+        .sheet(isPresented: $showingAI) { AIView(model: model).background(NonblockingSheet()) }
+        .sheet(item: $cursorRequest) { request in CursorTrailView(store: model.store, request: request).background(NonblockingSheet()) }
     }
 
     private var sidebar: some View {
@@ -354,12 +354,34 @@ struct SetupView: View {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
+            ScrollView {
+                settingsContent.padding(.trailing, 4)
+            }.frame(maxHeight: 560)
+            HStack {
+                Text("Choices save immediately. Closing the window does not quit.").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button("Quit AgentTrail") { NSApp.terminate(nil) }
+            }
+        }.padding(28).frame(width: 590).tint(Studio.signal)
+        .onAppear { model.refreshPermissions() }
+    }
+
+    private var settingsContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
             Text("AgentTrail saves sessions only after you press Start. Pause whenever you leave the demonstration.").font(.system(size: 12)).foregroundStyle(.secondary)
             VStack(spacing: 12) {
                 permission("Input Monitoring", detail: "Keyboard, pointer, buttons, and scroll", granted: model.hasInputPermission, action: model.requestInputPermission)
                 permission("Accessibility", detail: "Application, window, and element context", granted: model.hasAccessibilityPermission, action: model.requestAccessibility)
                 permission("Screen Recording", detail: "Only needed for optional screenshots", granted: model.hasScreenPermission, action: model.requestScreenPermission)
             }.padding(16).background(Studio.inset, in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Already enabled in System Settings? Fully quit and reopen AgentTrail, then recheck. If access is still missing, remove only AgentTrail's stale permission entry and add this app copy again.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                HStack {
+                    Button("Recheck access", action: model.refreshPermissions)
+                    Button("Reveal this app") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                }.font(.system(size: 12))
+            }
             VStack(alignment: .leading, spacing: 14) {
                 Text("ALWAYS CAPTURED").font(.system(size: 10, weight: .medium)).tracking(1.2).foregroundStyle(.secondary)
                 Text("Key codes and modifiers • clicks and drags • cursor movement • scroll • timestamps • sampled app context")
@@ -377,7 +399,7 @@ struct SetupView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }.font(.system(size: 12)).disabled(model.isRecording || model.isFinalizing)
             if model.isRecording { Text("Finish the current session to change capture options.").font(.caption).foregroundStyle(Studio.signal) }
-        }.padding(28).frame(width: 590).tint(Studio.signal)
+        }
     }
 
     private func split(_ value: String) -> [String] { value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }

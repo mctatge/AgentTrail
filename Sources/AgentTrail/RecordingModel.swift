@@ -11,7 +11,11 @@ final class RecordingModel: ObservableObject {
     @Published var selectedAction: TrailAction?
     @Published var query = "" { didSet { actionLimit = 500; refresh() } }
     @Published var title = ""
-    @Published var options = CaptureOptions()
+    @Published var options = CaptureOptions() {
+        didSet {
+            if let data = try? TrailJSON.encode(options) { captureDefaults.set(data, forKey: "captureOptions") }
+        }
+    }
     @Published var currentSession: Session?
     @Published var isPaused = false
     @Published var isFinalizing = false
@@ -24,6 +28,7 @@ final class RecordingModel: ObservableObject {
     @Published var elapsed: TimeInterval = 0
     @Published var suppression: String?
     let store: TrailStore
+    private let captureDefaults: UserDefaults
     private let input = InputCapture()
     private let contextResolver = ContextResolver()
     private let excelResolver = ExcelResolver()
@@ -46,10 +51,11 @@ final class RecordingModel: ObservableObject {
     private var generation = 0
     private var observers: [NSObjectProtocol] = []
 
-    init(store: TrailStore) throws {
+    init(store: TrailStore, captureDefaults: UserDefaults = .standard) throws {
         self.store = store
+        self.captureDefaults = captureDefaults
         try store.recoverInterruptedSessions()
-        if let data = UserDefaults.standard.data(forKey: "captureOptions"), let saved = try? JSONDecoder().decode(CaptureOptions.self, from: data) { options = saved }
+        if let data = captureDefaults.data(forKey: "captureOptions"), let saved = try? JSONDecoder().decode(CaptureOptions.self, from: data) { options = saved }
         input.onEvent = { [weak self] in self?.receive($0) }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
             guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -67,15 +73,26 @@ final class RecordingModel: ObservableObject {
             self.gap("Login session became inactive; recording paused")
             self.togglePause()
         })
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        refreshTimer = AppRunLoopTimer.schedule(interval: 1) { [weak self] _ in
             guard let self else { return }
-            self.hasInputPermission = CGPreflightListenEventAccess()
-            self.hasAccessibilityPermission = AXIsProcessTrusted()
-            self.hasScreenPermission = CGPreflightScreenCaptureAccess()
+            self.refreshPermissions()
             if let session = self.currentSession { self.elapsed = Date().timeIntervalSince1970 - session.startedAt }
             self.refresh()
         }
         refresh()
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
+        flushTimer?.invalidate()
+        contextTimer?.invalidate()
+        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+    }
+
+    func refreshPermissions() {
+        hasInputPermission = CGPreflightListenEventAccess()
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        hasScreenPermission = CGPreflightScreenCaptureAccess()
     }
 
     var isRecording: Bool { currentSession != nil && !isFinalizing }
@@ -91,12 +108,11 @@ final class RecordingModel: ObservableObject {
                                   options: options, metadata: ["schema_version": "1", "os": ProcessInfo.processInfo.operatingSystemVersionString,
                                                              "coordinates": "macOS global display points, main-display top-left origin for CG events",
                                                              "displays_appkit": displays, "keyboard_labels": "physical ANSI labels; raw key codes retained",
-                                                             "version": "0.2.1", "capture": "dedicated-thread listen-only annotated CGEventTap; AX sampled; no replay"])
+                                                             "version": "0.2.2", "capture": "dedicated-thread listen-only annotated CGEventTap; AX sampled; no replay"])
             input.sessionID = session.id
             input.includeText = options.captureText
             try input.start()
             do { try store.saveSession(session) } catch { input.stop(); throw error }
-            if let data = try? TrailJSON.encode(options) { UserDefaults.standard.set(data, forKey: "captureOptions") }
             currentSession = session
             isPaused = false
             elapsed = 0

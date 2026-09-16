@@ -39,6 +39,14 @@ Grant access to the packaged app, not to the compiler, shell, or AI client as a 
 
 Rebuilding or moving an ad-hoc-signed app can invalidate the recognized permissions. Finish the session and quit before updating. If an old entry no longer works, remove only AgentTrail's stale entry, add the newly built app, and relaunch. Do not reset permissions for unrelated applications. A stable Developer ID identity can be selected using `AGENTTRAIL_SIGN_IDENTITY` when building; obtaining a signing identity and notarizing a distribution are separate maintainer tasks.
 
+### Settings says enabled, but AgentTrail does not
+
+Use **Capture settings → Recheck access** after returning from System Settings. If access is still unavailable, finish the session, choose **Quit AgentTrail**, and reopen the same app. Closing the red window button leaves the menu-bar recorder running; it is not a restart. The macOS grant and AgentTrail's optional screenshot/text switches are separate controls.
+
+If Accessibility still appears unavailable after a full restart, use **Reveal this app** to locate the exact running copy. Remove only AgentTrail's old entry from the relevant Privacy & Security list, add that app copy again, and enable it through the normal macOS authorization prompt. Do not authorize a different build or disable macOS protections. Screen Recording can also require a full quit/reopen before a grant is recognized.
+
+In 0.2.2, capture choices save immediately and survive quitting before the next session. Permission checks and the save-before-quit wait no longer depend on default-mode-only timers, and AgentTrail's settings/review sheets no longer veto Quit. If an older build ignores Quit, first close its settings or review sheet with **Done**. If recording, use **Finish session**, wait for **Session saved**, then try Quit again. Force Quit is a last resort: it can lose queued inputs, though already committed events are recovered on the next launch.
+
 ## First recording
 
 Read [Privacy and responsible use](../PRIVACY.md). Start with a blank, disposable document and no sensitive windows. Name the session, press **Start recording**, switch to the target app, type a short phrase, drag, and finish. Check raw key and pointer events in the inspector and cursor viewer. An app-focus or context observation alone does not prove input capture worked.

@@ -66,13 +66,16 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationDidBecomeActive(_ notification: Notification) { model.refreshPermissions() }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard model.currentSession != nil || model.isFinalizing else { return .terminateNow }
+        guard terminationTimer == nil else { return .terminateLater }
         model.stop()
-        terminationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+        terminationTimer = AppRunLoopTimer.schedule(interval: 0.1) { [weak self] timer in
             guard let self, self.model.currentSession == nil, !self.model.isFinalizing else { return }
             timer.invalidate()
+            self.terminationTimer = nil
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
