@@ -103,6 +103,13 @@ public final class ActionBuilder {
             let summary: String
             switch event.kind {
             case "app_focus": summary = "Switch to \(event.app)"
+            case "window_resize":
+                let title = event.windowTitle.map { " · \($0)" } ?? ""
+                if let before = event.previousWindowFrame, let after = event.windowFrame {
+                    summary = "Resize window\(title) · \(Int(before.width))×\(Int(before.height)) → \(Int(after.width))×\(Int(after.height))"
+                } else {
+                    summary = "Resize window\(title)"
+                }
             case "marker": summary = "Bookmark · \(event.text ?? "Moment to review")"
             case "clipboard": summary = "Clipboard changed · \(event.text.map { String($0.prefix(160)) } ?? "content not collected")"
             case "gap": summary = CaptureGap.summary(event.fields["reason"] ?? "unavailable")

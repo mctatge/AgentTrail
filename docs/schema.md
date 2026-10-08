@@ -6,7 +6,7 @@ Exports use UTF-8 JSON Lines, one independently parseable object per line. Field
 
 `id`, `title`, `startedAt`, optional `endedAt`, `status`, `options`, `eventCount`, `actionCount`, and string-valued `metadata`.
 
-Status is recording, paused, complete, or interrupted. Exported counts are computed from committed database rows. Metadata includes schema/app/OS versions, coordinate conventions, and the initial AppKit display layout. Synthetic examples have `metadata.synthetic = "true"`.
+Status is recording, paused, complete, or interrupted. These values describe capture state, not whether the GUI draft has been saved: a stopped unsaved draft can be complete in its in-memory database. Unsaved state belongs to the GUI lifecycle; only explicit Save adds a new recording to the durable library. Exported counts are computed from saved database rows. Metadata includes schema/app/OS versions, coordinate conventions, and the initial AppKit display layout. Synthetic examples have `metadata.synthetic = "true"`.
 
 ## Raw event
 
@@ -25,11 +25,18 @@ Status is recording, paused, complete, or interrupted. Exported counts are compu
 | `modifiers` | Ordered names: control, option, shift, command, caps_lock, function |
 | `text` | Optional Unicode/clipboard/bookmark content |
 | `context` | Independently timestamped sampled context |
+| `windowTitle` | Title of the observed resized window, when Accessibility exposes one |
+| `windowFrame` | Observed window frame after a resize as `[x, y, width, height]` |
+| `previousWindowFrame` | Last observed frame before the resize as `[x, y, width, height]` |
 | `relatedEventID` | Input this asynchronous context/frame was requested for |
 | `attachment` | Relative screenshot path under the library/export |
 | `fields` | Extra string fields such as source_pid, repeat, printable, reason, timing |
 
-Kinds: `key_down`, `key_up`, `flags_changed`, `mouse_down`, `mouse_up`, `mouse_move`, `mouse_drag`, `scroll`, `app_focus`, `context`, `clipboard`, `screenshot`, `marker`, `gap`, `pause`, `resume`, `session_start`, `session_end`.
+Kinds: `key_down`, `key_up`, `flags_changed`, `mouse_down`, `mouse_up`, `mouse_move`, `mouse_drag`, `scroll`, `app_focus`, `window_resize`, `context`, `clipboard`, `screenshot`, `marker`, `gap`, `pause`, `resume`, `session_start`, `session_end`.
+
+`window_resize` is an observed Accessibility window-bounds change, not a claim that a particular pointer gesture caused it. It is emitted only when width or height changes; the raw mouse events remain separate evidence. `windowFrame` and `previousWindowFrame` use the Accessibility coordinate space and can be absent when an app does not expose a focused window or its position/size.
+
+When saving an in-memory draft, event and action IDs can change to fit the destination library. The save operation remaps `relatedEventID` and action event ranges together; references obtained while reviewing a draft must be refreshed after Save. Session UUIDs remain the session identity.
 
 `monotonicNS` preserves source clocks without converting them to fabricated wall times. Order records by ID, use wall timestamps for cross-observation navigation, and compare monotonic deltas only for known compatible sources. `source_pid` is evidence about OS event provenance, not a human/AI classification.
 
@@ -47,7 +54,7 @@ A click hit-test runs after the click has reached the app; the UI may already ha
 
 `id`, `sessionID`, `startedAt`, `endedAt`, `kind`, `summary`, `app`, `bundleID`, `firstEventID`, `lastEventID`, `eventCount`, optional `context`, and optional `inference`.
 
-IDs in the inclusive raw range can include ignored modifier/up/context events; `eventCount` counts inputs consumed into that group, not necessarily every row in the range. Actions are rebuilt on interrupted-session recovery, so action IDs are not stable across a rebuild. Raw event IDs remain stable.
+IDs in the inclusive raw range can include ignored modifier/up/context events; `eventCount` counts inputs consumed into that group, not necessarily every row in the range. Actions are rebuilt on interrupted-session recovery, so action IDs are not stable across a rebuild. Saved raw event IDs remain stable during recovery; the initial move from draft to saved library can remap IDs as described above.
 
 Kinds include shortcut, typing, click, release, drag, move, scroll, and recorder marker/lifecycle kinds. A one-second input gap, app change, session change, or action category change closes a group. A held drag remains grouped across long pauses until a release or another action boundary.
 

@@ -27,6 +27,6 @@ Stage only intended files, inspect `git diff --cached`, then run:
 python3 scripts/check-publication.py
 ```
 
-This checks the exact indexed content, even if a file was force-added despite `.gitignore`. CI runs it too. Its pattern/format checks are defense in depth, not an anonymizer or a complete secret scanner. A CI rejection happens after a push, so use the local check before publishing. It rejects recordings and binary assets except the exact paths and SHA-256 hashes of visually reviewed synthetic-only documentation screenshots. Replacing an approved image also requires review and a hash update; discuss publication-policy changes before adding other assets or fixture formats.
+This checks the exact indexed content, even if a file was force-added despite `.gitignore`. CI runs it too. Its pattern/format checks are defense in depth, not an anonymizer or a complete secret scanner. A CI rejection happens after a push, so use the local check before publishing. It rejects recordings and binary assets except the exact paths and SHA-256 hashes of visually reviewed synthetic-only documentation screenshots and original app-icon artwork, documented in [the visual asset policy](docs/assets/README.md). Replacing an approved image also requires review and a hash update; discuss publication-policy changes before adding other assets or fixture formats.
 
 Keep `CLAUDE.md` a short documentation router; put detailed facts in the relevant domain document. Source builds live in ignored `.build/` and `dist/`; recordings belong outside the repository.

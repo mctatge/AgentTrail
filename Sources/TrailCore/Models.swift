@@ -68,6 +68,67 @@ public struct ElementContext: Codable, Equatable {
     }
 }
 
+public struct WindowFrame: Codable, Equatable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    public var array: [Double] { [x, y, width, height] }
+}
+
+public struct WindowGeometrySnapshot: Equatable {
+    public var identity: String
+    public var app: String
+    public var bundleID: String
+    public var pid: Int32
+    public var windowTitle: String?
+    public var frame: WindowFrame
+
+    public init(identity: String, app: String, bundleID: String, pid: Int32,
+                windowTitle: String?, frame: WindowFrame) {
+        self.identity = identity
+        self.app = app
+        self.bundleID = bundleID
+        self.pid = pid
+        self.windowTitle = windowTitle
+        self.frame = frame
+    }
+}
+
+public struct WindowGeometryChange: Equatable {
+    public var previous: WindowGeometrySnapshot
+    public var current: WindowGeometrySnapshot
+
+    public init(previous: WindowGeometrySnapshot, current: WindowGeometrySnapshot) {
+        self.previous = previous
+        self.current = current
+    }
+}
+
+public final class WindowGeometryTracker {
+    private var previous: WindowGeometrySnapshot?
+
+    public init() {}
+
+    public func reset() { previous = nil }
+
+    @discardableResult
+    public func observe(_ snapshot: WindowGeometrySnapshot) -> WindowGeometryChange? {
+        defer { previous = snapshot }
+        guard let previous, previous.identity == snapshot.identity else { return nil }
+        guard previous.frame.width != snapshot.frame.width || previous.frame.height != snapshot.frame.height else { return nil }
+        return WindowGeometryChange(previous: previous, current: snapshot)
+    }
+}
+
 public struct TrailEvent: Codable, Identifiable, Equatable {
     public var id: Int64
     public var sessionID: String
@@ -86,6 +147,9 @@ public struct TrailEvent: Codable, Identifiable, Equatable {
     public var modifiers: [String]
     public var text: String?
     public var context: ElementContext?
+    public var windowTitle: String?
+    public var windowFrame: WindowFrame?
+    public var previousWindowFrame: WindowFrame?
     public var relatedEventID: Int64?
     public var attachment: String?
     public var fields: [String: String]

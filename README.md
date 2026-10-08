@@ -6,7 +6,7 @@
 
 AgentTrail is a local macOS app that records keyboard and pointer inputs, samples application context, and turns a demonstration into a searchable timeline. Export the raw events and grouped actions for dataset preparation, agent evaluation, or a conversation with an AI assistant.
 
-Press Start, work in your apps, and finish the session. Inspect a shortcut or drag, follow it back to its source events, and keep bookmarks for moments worth reviewing.
+Press Start, work in your apps, and stop recording. Review the unsaved draft, then choose **Save recording** to keep it or **Discard** to release it. Recording data and screenshots stay in memory until you explicitly save.
 
 ![AgentTrail timeline showing a synthetic drag, Command-D shortcut, bookmark, and the shortcut's supporting event evidence.](docs/assets/timeline.jpg)
 
@@ -32,11 +32,12 @@ After the first build, double-click **Open AgentTrail.command** or the app in `d
 1. Open **Capture settings**. Enable **Input Monitoring** for keys/pointer and **Accessibility** for context in macOS System Settings. If AgentTrail is absent, use the **+** button, press **Command–Shift–G**, navigate to this checkout's `dist/` folder, and choose **AgentTrail.app**. Quit and relaunch after permission changes. Screen Recording and Excel Automation are optional.
 2. Give the demonstration a name and press **Start recording**.
 3. Work in a native app or a browser. **Control–Option–Command–P** pauses/resumes; **Control–Option–Command–M** adds a bookmark. The shortcuts are listen-only and may also reach the foreground app.
-4. Press **Finish session**. Search the timeline, select an action to inspect its raw evidence, or **Export** a dataset.
+4. Press **Stop recording**. Search the unsaved timeline and select an action to inspect its raw evidence.
+5. Choose **Save recording** to add it to your library, or **Discard**. Export and AI queries are available for saved recordings. Save or discard the draft before starting another recording.
 
-**Explore an example** opens a clearly labeled synthetic spreadsheet session without recording computer input.
+**Explore an example** opens a clearly labeled synthetic spreadsheet draft without recording computer input. It also remains unsaved until you choose **Save recording**.
 
-Start with a short disposable test: type a phrase in another app, drag, pause, resume, and finish. Confirm that the timeline contains actual key and pointer events, not only context observations. The latest capture-thread fix has automated regression coverage, but its physical-input/window-resize acceptance test is still pending. See [validation status](docs/validation.md); do not assume lossless capture or production readiness.
+Start with a short disposable test: type a phrase in another app, drag, pause, resume, and stop. Confirm that the timeline contains actual key and pointer events, not only context observations. A prior local export contains key, pointer, and resize evidence; full physical capture through Save, Quit/reopen, export, and cancellation remains pending. See [validation status and acceptance protocol](docs/validation.md#physical-capture-audit--2026-10-07); do not assume lossless capture or production readiness.
 
 ## Cursor trails
 
@@ -57,11 +58,12 @@ The map preserves aspect ratio and negative coordinates. It fits the captured mo
 | Scroll | Horizontal/vertical point deltas and continuous-scroll flag |
 | Time | UTC receipt timestamps, OS input timestamps, ordered database event IDs |
 | Context | App and bundle ID, focus changes, sampled window and accessible element metadata |
+| Window geometry | Observed focused-window size changes with before/after frames when Accessibility exposes them |
 | Clipboard | Change observations and type names; text is optional |
 | Bookmarks | Timestamped notes for intent, unusual behavior, or labels |
 | Coverage | Pause/resume, protected-input intervals, event-tap failures, interrupted sessions |
 
-Optional settings enable Unicode text and accessibility values, clipboard text, window screenshots, and Excel workbook/sheet/selection sampling. Capture options are stored with each session. Input collection begins only after an explicit Start; there is no launch-at-login service.
+Optional settings enable Unicode text and accessibility values, clipboard text, window screenshots, and Excel workbook/sheet/selection sampling. Capture preferences persist when changed; each draft snapshots those options when started, and they become part of the saved session only when you save. Input collection begins only after an explicit Start; there is no launch-at-login service.
 
 ### Spreadsheet demonstrations
 
@@ -86,7 +88,7 @@ timeline.md        A readable timeline for review or AI attachment
 sessions/...      Optional screenshot attachments
 ```
 
-The action builder groups mouse movements, drag gestures, scroll bursts, and typing. Raw data remains available. There is no automatic deletion or retention limit in this release; manage the local library and exported copies yourself.
+Save a recording before exporting it. The action builder groups mouse movements, drag gestures, scroll bursts, and typing. Raw data remains available. Saved recordings have no automatic deletion or retention limit in this release; manage the local library and exported copies yourself.
 
 The training format is an intermediate dataset, not a model-specific fine-tuning format or a replay program. Synthetic examples are labeled as synthetic. The recorder cannot reliably distinguish physical human inputs from generated OS inputs.
 
@@ -98,23 +100,25 @@ Example request:
 
 > Find every fill-down shortcut and drag in this session. Show the observed selection, supporting event IDs, and anything the log cannot verify.
 
-The embedded MCP server uses stdio and exposes only `list_sessions`, `search_actions`, and `get_events`. It opens SQLite read-only and has no capture, modification, shell, or arbitrary SQL tool. See [AI integration](docs/ai-integration.md) for configuration and paging.
+The embedded MCP server uses stdio and exposes only `list_sessions`, `search_actions`, and `get_events`. It opens the saved library read-only and has no capture, modification, shell, or arbitrary SQL tool. Unsaved drafts are unavailable to MCP and the CLI. See [AI integration](docs/ai-integration.md) for configuration and paging.
 
 AgentTrail makes no network requests. If you connect an AI client, that client's handling of returned data determines whether recording contents leave your Mac.
 
-Connecting MCP gives that client read access to **every session in the selected local library**, not just the one selected in the app. Session IDs are query filters, not authorization boundaries. For a narrower scope, record into a separate `--root` library. Review data before allowing a client to retrieve it.
+Connecting MCP gives that client read access to **every saved session in the selected local library**, not just the one selected in the app. Session IDs are query filters, not authorization boundaries. For a narrower scope, record into a separate `--root` library. Review data before allowing a client to retrieve it.
 
 ## Local data and capture controls
 
-The library defaults to `~/Library/Application Support/AgentTrail/`. Directories are created owner-only and the database and exported raw records use owner-only file permissions. SQLite uses WAL transactions. These controls are not encryption.
+New recordings use an in-memory SQLite database and in-memory screenshot bytes. Starting, pausing, and stopping do not add a recording to the library. **Save recording** is the explicit persistence step; **Discard** releases the draft. An unexpected exit loses the entire unsaved draft. This describes AgentTrail’s own storage behavior, not a guarantee against macOS swap, crash dumps, or memory recovery. Discard is not secure erasure.
 
-The complete committed raw log lives in the **events table of `library.sqlite`**. Use **Open recording library** in the sidebar to find it. While the app is open, SQLite's neighboring `-wal` and `-shm` files may contain live database state; use Export or the CLI rather than copying just the database file.
+The saved library defaults to `~/Library/Application Support/AgentTrail/`. Directories are created owner-only and the database and exported raw records use owner-only file permissions. The durable SQLite database uses WAL transactions. These controls are not encryption.
 
-For terminal use, `AgentTrail raw SESSION_ID` streams every raw event as JSONL; add `--follow` to keep streaming newly committed events until the session finishes (Ctrl-C stops the reader). It has no 500-record cap. Redirect stdout to save a plain-text log. The GUI, CLI, and MCP server all read the same library.
+After saving, the complete raw log lives in the **events table of `library.sqlite`**. Use **Open recording library** in the sidebar to find it. While the app is open, SQLite's neighboring `-wal` and `-shm` files may contain live database state; use Export or the CLI rather than copying just the database file.
+
+For terminal use, `AgentTrail raw SESSION_ID` streams every saved raw event as JSONL without a 500-record cap. Redirect stdout to save a plain-text log. The GUI, CLI, and MCP server share the saved library; the GUI alone can review its current in-memory draft. `--follow` remains available for legacy on-disk sessions, but does not expose new unsaved recordings.
 
 Keyboard codes can reconstruct typed content even with literal text disabled. Common password-manager bundle IDs are excluded by default; the app suppresses capture during macOS secure input and recognized accessible password fields. Detection depends on the application. Pause before entering credentials or leaving a demonstration. Screenshots can contain unrelated visible information inside the captured app window.
 
-An allowlist can restrict recording to specific app bundle IDs. Recorder controls are excluded. Pausing continues to listen for the resume shortcut but does not persist ordinary inputs. Closing the workspace leaves the visible menu-bar recorder running; Quit finishes and saves the session.
+An allowlist can restrict recording to specific app bundle IDs. Recorder controls are excluded. Pausing continues to listen for the resume shortcut but does not collect ordinary inputs. Closing the workspace with an unsaved recording asks whether to keep AgentTrail running in the menu bar. With an unsaved recording, Quit offers **Save and Quit**, **Discard and Quit**, or **Cancel**; it never saves automatically.
 
 **“Not recorded · AgentTrail controls (intentional)” is normal** when using or resizing AgentTrail itself. It is different from **“Capture gap”**, which reports actual listener failures or dropped events. Since 0.2.1, input capture runs on its own thread rather than sharing the UI thread; ordinary window resizing should not disable the listener. Earlier missing inputs cannot be reconstructed from context observations.
 
@@ -122,8 +126,10 @@ An allowlist can restrict recording to specific app bundle IDs. Recorder control
 
 - “Raw” means events delivered by macOS, not every physical device report. macOS can coalesce pointer motion, withhold secure inputs, or disable a stalled event tap. Trackpad magnify/rotate/swipe, pressure, touch, and IME composition lifecycle events are not implemented.
 - Context and screenshots are asynchronous observations with their own timestamps. They are not guaranteed pre-action states or proof of an outcome. Foreground windows are sampled; canvas cells and custom widgets may be opaque.
-- The app queues inputs and commits batches roughly every 100 ms under normal load. A crash can lose queued/uncommitted inputs. Committed raw events survive; the next launch rebuilds interrupted timelines and marks them interrupted.
-- The capture-to-UI buffer and pending/queued writer stages each have an 8,000-input budget; lifecycle markers can exceed that budget. Overflow is recorded as a capture gap. Disk failures stop capture. This is an initial release, not a lossless hardware acquisition system.
+- Window geometry observations report an Accessibility-exposed bounds change; they do not prove that a pointer drag caused it, and apps may omit notifications or expose no focused-window geometry. Raw resize gestures remain ordinary pointer events.
+- The app queues inputs and commits batches to its in-memory draft roughly every 100 ms under normal load. A crash loses the entire unsaved draft, including screenshots. Previously saved recordings remain in the library. Interrupted recordings left on disk by older versions can still be recovered and marked interrupted.
+- The capture-to-UI buffer and pending/queued writer stages each have an 8,000-input budget; lifecycle markers can exceed that budget. Overflow is recorded as a capture gap. Draft-storage failures stop capture; Save failures leave the draft available for retry or discard. This is an initial release, not a lossless hardware acquisition system.
+- Each draft has a 128 MiB database limit and a separate 128 MiB screenshot-byte limit. Capture stops before exhausting these limits and leaves retained evidence for review, Save, or Discard. Actual process memory is higher because buffers, decoded records, and UI images also consume memory.
 - Typed/accessibility text is capped at 4,096 characters per context value, clipboard text at 16,384 characters per sample, typing summaries at 512 characters, screenshots at one request per second. Raw keystroke records retain per-event codes.
 - Screenshot requests capture an available on-screen window owned by the foreground app. Apps with multiple windows can yield a different window than intended. Screenshot timing is reported as a request-to-completion interval.
 - The ad-hoc signature used by default is suitable for local builds. Rebuilding or moving the app can invalidate macOS permissions. For distribution, use a stable signing identity and a separate notarization/release process. `AGENTTRAIL_SIGN_IDENTITY` selects a signing identity for the build script.

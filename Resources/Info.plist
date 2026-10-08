@@ -6,9 +6,10 @@
     <key>CFBundleIdentifier</key><string>local.agenttrail.recorder</string>
     <key>CFBundleName</key><string>AgentTrail</string>
     <key>CFBundleDisplayName</key><string>AgentTrail</string>
+    <key>CFBundleIconFile</key><string>AppIcon.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.2</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleVersion</key><string>6</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>AgentTrail reads your current Excel workbook, worksheet, and selection to add context to demonstrations you choose to record.</string>

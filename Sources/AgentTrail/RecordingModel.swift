@@ -17,6 +17,8 @@ final class RecordingModel: ObservableObject {
         }
     }
     @Published var currentSession: Session?
+    @Published private(set) var draftSession: Session?
+    @Published private(set) var isSaving = false
     @Published var isPaused = false
     @Published var isFinalizing = false
     @Published var errorMessage: String?
@@ -29,15 +31,20 @@ final class RecordingModel: ObservableObject {
     @Published var suppression: String?
     let store: TrailStore
     private let captureDefaults: UserDefaults
-    private let input = InputCapture()
+    private let input: RecordingInput
+    private let observesWorkspace: Bool
+    private var draftStore: TrailStore?
+    private var libraryRevision = 0
     private let contextResolver = ContextResolver()
     private let excelResolver = ExcelResolver()
     private let screenshots = ScreenshotCapture()
+    private let windowGeometryObserver = WindowGeometryObserver()
     private let writerQueue = DispatchQueue(label: "agenttrail.writer", qos: .utility)
     private var builder = ActionBuilder()
     private var pending: [TrailEvent] = []
     private var outstandingEvents = 0
     private var failedSessionIDs: Set<String> = []
+    private var handlingFailure = false
     private var cachedContext: ElementContext?
     private var cachedExcel: ElementContext?
     private var flushTimer: Timer?
@@ -51,32 +58,38 @@ final class RecordingModel: ObservableObject {
     private var generation = 0
     private var observers: [NSObjectProtocol] = []
 
-    init(store: TrailStore, captureDefaults: UserDefaults = .standard) throws {
+    init(store: TrailStore, captureDefaults: UserDefaults = .standard, input: RecordingInput = InputCapture(), observesWorkspace: Bool = true) throws {
         self.store = store
         self.captureDefaults = captureDefaults
+        self.input = input
+        self.observesWorkspace = observesWorkspace
         try store.recoverInterruptedSessions()
         if let data = captureDefaults.data(forKey: "captureOptions"), let saved = try? JSONDecoder().decode(CaptureOptions.self, from: data) { options = saved }
         input.onEvent = { [weak self] in self?.receive($0) }
-        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
-            guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            self.input.drain()
-            self.input.updateForeground(app)
-            self.trackFocus(app)
-        })
-        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, self.currentSession != nil, !self.isPaused else { return }
-            self.gap("System sleep; recording paused until manually resumed")
-            self.togglePause()
-        })
-        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, self.currentSession != nil, !self.isPaused else { return }
-            self.gap("Login session became inactive; recording paused")
-            self.togglePause()
-        })
+        windowGeometryObserver.onEvent = { [weak self] in self?.receive($0) }
+        if observesWorkspace {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
+                guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                self.input.drain()
+                self.input.updateForeground(app)
+                self.trackFocus(app)
+            })
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.currentSession != nil, !self.isPaused else { return }
+                self.gap("System sleep; recording paused until manually resumed")
+                self.togglePause()
+            })
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.currentSession != nil, !self.isPaused else { return }
+                self.gap("Login session became inactive; recording paused")
+                self.togglePause()
+            })
+        }
         refreshTimer = AppRunLoopTimer.schedule(interval: 1) { [weak self] _ in
             guard let self else { return }
             self.refreshPermissions()
             if let session = self.currentSession { self.elapsed = Date().timeIntervalSince1970 - session.startedAt }
+            self.startWindowGeometryObservation(for: NSWorkspace.shared.frontmostApplication)
             self.refresh()
         }
         refresh()
@@ -86,6 +99,7 @@ final class RecordingModel: ObservableObject {
         refreshTimer?.invalidate()
         flushTimer?.invalidate()
         contextTimer?.invalidate()
+        windowGeometryObserver.stop()
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
@@ -97,27 +111,43 @@ final class RecordingModel: ObservableObject {
 
     var isRecording: Bool { currentSession != nil && !isFinalizing }
     var selectedSession: Session? { sessions.first { $0.id == selectedSessionID } }
-    var status: String { isFinalizing ? "Saving" : isRecording ? (isPaused ? "Paused" : suppression == nil ? "Recording" : "Protected") : "Ready" }
+    var hasUnsavedRecording: Bool { draftSession != nil }
+    var selectedStore: TrailStore { store(for: selectedSessionID) }
+    func store(for sessionID: String?) -> TrailStore {
+        if let draftStore, let sessionID, draftSession?.id == sessionID { return draftStore }
+        return store
+    }
+    var status: String {
+        if isSaving { return "Saving" }
+        if isFinalizing { return "Finishing" }
+        if isRecording { return isPaused ? "Paused · Unsaved" : suppression == nil ? "Recording · Unsaved" : "Protected · Unsaved" }
+        return hasUnsavedRecording ? "Unsaved" : "Ready"
+    }
 
     func start() {
-        guard currentSession == nil, !isFinalizing else { return }
+        guard currentSession == nil, !isFinalizing, !isSaving, !hasUnsavedRecording else { return }
         do {
             let sessionTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let displays = NSScreen.screens.map { "\($0.localizedName):\($0.frame),scale=\($0.backingScaleFactor)" }.joined(separator: "; ")
+            let displays = (observesWorkspace ? NSScreen.screens : []).map { "\($0.localizedName):\($0.frame),scale=\($0.backingScaleFactor)" }.joined(separator: "; ")
             let session = Session(title: sessionTitle.isEmpty ? "Demonstration · \(Date().formatted(date: .abbreviated, time: .shortened))" : sessionTitle,
                                   options: options, metadata: ["schema_version": "1", "os": ProcessInfo.processInfo.operatingSystemVersionString,
                                                              "coordinates": "macOS global display points, main-display top-left origin for CG events",
                                                              "displays_appkit": displays, "keyboard_labels": "physical ANSI labels; raw key codes retained",
-                                                             "version": "0.2.2", "capture": "dedicated-thread listen-only annotated CGEventTap; AX sampled; no replay"])
+                                                             "version": "0.3.0", "capture": "dedicated-thread listen-only annotated CGEventTap; AX sampled including focused-window geometry; no replay"])
+            let draft = try TrailStore(root: store.root, inMemory: true)
+            try draft.saveSession(session)
             input.sessionID = session.id
             input.includeText = options.captureText
             try input.start()
-            do { try store.saveSession(session) } catch { input.stop(); throw error }
+            draftStore = draft
+            draftSession = session
+            libraryRevision += 1
             currentSession = session
             isPaused = false
             elapsed = 0
             generation += 1
             builder = ActionBuilder()
+            handlingFailure = false
             cachedContext = nil
             cachedExcel = nil
             lastBundleID = ""
@@ -125,23 +155,26 @@ final class RecordingModel: ObservableObject {
             suppression = nil
             clipboardChange = NSPasteboard.general.changeCount
             excelResolver.reset()
+            windowGeometryObserver.sessionID = session.id
             selectedSessionID = session.id
             pending.append(TrailEvent(sessionID: session.id, kind: "session_start"))
             let flushTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.flush() }
             let contextTimer = Timer(timeInterval: 0.75, repeats: true) { [weak self] _ in self?.sampleContext() }
             RunLoop.main.add(flushTimer, forMode: .common)
-            RunLoop.main.add(contextTimer, forMode: .common)
+            if observesWorkspace { RunLoop.main.add(contextTimer, forMode: .common) }
             self.flushTimer = flushTimer
             self.contextTimer = contextTimer
-            notice = "Recording your demonstration. ⌃⌥⌘P pauses; ⌃⌥⌘M adds a bookmark."
+            startWindowGeometryObservation(for: NSWorkspace.shared.frontmostApplication)
+            notice = "Recording temporarily. Nothing is saved until you choose Save recording. ⌃⌥⌘P pauses."
             errorMessage = nil
             flush()
         } catch { errorMessage = error.localizedDescription }
     }
 
     func stop() {
-        guard var session = currentSession, !isFinalizing else { return }
-        input.stop()
+        guard var session = currentSession, let draft = draftStore, !isFinalizing else { return }
+        windowGeometryObserver.stop()
+        input.stop(deliverPending: true)
         flushTimer?.invalidate()
         contextTimer?.invalidate()
         generation += 1
@@ -154,17 +187,19 @@ final class RecordingModel: ObservableObject {
         let activeBuilder = builder
         writerQueue.async {
             do {
-                guard !self.failedSessionIDs.contains(finalized.id) else { throw TrailError.message("Some input batches failed to save. The session remains interrupted.") }
-                try self.store.transaction {
-                    for action in activeBuilder.flush() { try self.store.append(action) }
-                    try self.store.saveSession(finalized)
+                guard !self.failedSessionIDs.contains(finalized.id) else { throw TrailError.message("Some input batches could not be retained. Review the interrupted draft before saving.") }
+                try draft.transaction {
+                    for action in activeBuilder.flush() { try draft.append(action) }
+                    try draft.saveSession(finalized)
                 }
                 DispatchQueue.main.async {
+                    self.libraryRevision += 1
+                    self.draftSession = finalized
                     self.currentSession = nil
                     self.isFinalizing = false
                     self.isPaused = false
                     self.suppression = nil
-                    self.notice = "Session saved. Search the timeline or export the dataset."
+                    self.notice = "Recording stopped. Review it, then choose Save recording or Discard. Nothing has been saved."
                     self.refresh()
                 }
             } catch { DispatchQueue.main.async { if self.currentSession?.id == finalized.id { self.fail(error) } } }
@@ -177,19 +212,26 @@ final class RecordingModel: ObservableObject {
     }
 
     private func applyPause(_ event: TrailEvent) {
-        guard var session = currentSession, !isFinalizing else { return }
+        guard var session = currentSession, let draft = draftStore, !isFinalizing else { return }
         isPaused = event.kind == "pause"
+        if isPaused {
+            windowGeometryObserver.stop()
+        } else if observesWorkspace {
+            startWindowGeometryObservation(for: NSWorkspace.shared.frontmostApplication)
+        }
         generation += 1
         cachedContext = nil
         cachedExcel = nil
         clipboardChange = NSPasteboard.general.changeCount
         session.status = isPaused ? "paused" : "recording"
         currentSession = session
+        draftSession = session
+        libraryRevision += 1
         pending.append(event)
         flush()
         let saved = session
         writerQueue.async {
-            do { try self.store.saveSession(saved) }
+            do { try draft.saveSession(saved) }
             catch {
                 self.failedSessionIDs.insert(saved.id)
                 DispatchQueue.main.async { if self.currentSession?.id == saved.id { self.fail(error) } }
@@ -233,15 +275,21 @@ final class RecordingModel: ObservableObject {
         let sessionID = selectedSessionID
         let search = query
         let limit = actionLimit
+        let revision = libraryRevision
+        let draft = draftStore
+        let draftID = draftSession?.id
         DispatchQueue.global(qos: .utility).async {
             do {
-                let sessions = try self.store.sessions()
+                let saved = try self.store.sessions()
+                let unsaved = try draft?.sessions().first
+                let sessions = (unsaved.map { [$0] } ?? []) + saved
                 let selected = sessionID ?? sessions.first?.id
+                let source = selected != nil && selected == draftID ? (draft ?? self.store) : self.store
                 var actions: [TrailAction] = []
                 if let selected {
                     var cursor: Int64 = 0
                     while actions.count < limit {
-                        let batch = try self.store.actions(sessionID: selected, query: search, afterID: cursor, limit: min(1000, limit - actions.count))
+                        let batch = try source.actions(sessionID: selected, query: search, afterID: cursor, limit: min(1000, limit - actions.count))
                         actions += batch
                         guard let last = batch.last else { break }
                         cursor = last.id
@@ -249,30 +297,100 @@ final class RecordingModel: ObservableObject {
                 }
                 DispatchQueue.main.async {
                     self.refreshing = false
+                    guard self.libraryRevision == revision else { self.refresh(); return }
                     self.sessions = sessions
+                    if self.draftSession?.id == draftID { self.draftSession = unsaved }
                     if self.selectedSessionID == sessionID && self.query == search {
                         self.actions = actions
                         if self.selectedSessionID == nil { self.selectedSessionID = selected }
-                    }
+                    } else { self.refresh() }
                 }
             } catch {
-                DispatchQueue.main.async { self.refreshing = false; self.errorMessage = error.localizedDescription }
+                DispatchQueue.main.async {
+                    self.refreshing = false
+                    if self.libraryRevision == revision { self.errorMessage = error.localizedDescription }
+                    else { self.refresh() }
+                }
             }
         }
     }
 
     func createDemo() {
-        guard !isRecording, !isFinalizing else { return }
+        guard !isRecording, !isFinalizing, !isSaving, !hasUnsavedRecording else { return }
+        isFinalizing = true
         writerQueue.async {
             do {
-                let session = try DemoSession.create(in: self.store)
-                DispatchQueue.main.async { self.selectedSessionID = session.id; self.notice = "Synthetic example loaded. No computer input was recorded."; self.refresh() }
-            } catch { DispatchQueue.main.async { self.errorMessage = error.localizedDescription } }
+                let draft = try TrailStore(root: self.store.root, inMemory: true)
+                let session = try DemoSession.create(in: draft)
+                DispatchQueue.main.async {
+                    self.draftStore = draft
+                    self.draftSession = session
+                    self.libraryRevision += 1
+                    self.isFinalizing = false
+                    self.selectedSessionID = session.id
+                    self.notice = "Unsaved synthetic example. Save it to keep it, or discard it. No computer input was recorded."
+                    self.refresh()
+                }
+            } catch {
+                DispatchQueue.main.async { self.isFinalizing = false; self.errorMessage = error.localizedDescription }
+            }
         }
     }
 
+    func saveRecording(completion: ((Bool) -> Void)? = nil) {
+        guard let draft = draftStore, let session = draftSession,
+              currentSession == nil, !isFinalizing, !isSaving else { completion?(false); return }
+        isSaving = true
+        errorMessage = nil
+        notice = "Saving recording…"
+        writerQueue.async {
+            do {
+                _ = try self.store.saveRecording(from: draft, sessionID: session.id)
+                DispatchQueue.main.async {
+                    self.libraryRevision += 1
+                    self.draftSession = nil
+                    self.draftStore = nil
+                    self.selectedAction = nil
+                    self.actions = []
+                    self.isSaving = false
+                    self.failedSessionIDsCleanup(session.id)
+                    self.notice = "Recording saved. It is now in your library and available for export."
+                    self.refresh()
+                    completion?(true)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isSaving = false
+                    self.errorMessage = "Could not save recording: \(error.localizedDescription). Your unsaved recording is still here; retry Save or choose Discard."
+                    completion?(false)
+                }
+            }
+        }
+    }
+
+    func discardRecording() {
+        guard let session = draftSession, currentSession == nil, !isFinalizing, !isSaving else { return }
+        libraryRevision += 1
+        draftSession = nil
+        draftStore = nil
+        pending.removeAll()
+        builder = ActionBuilder()
+        cachedContext = nil
+        cachedExcel = nil
+        sessions.removeAll { $0.id == session.id }
+        if selectedSessionID == session.id { selectedSessionID = sessions.first?.id; selectedAction = nil; actions = [] }
+        failedSessionIDsCleanup(session.id)
+        errorMessage = nil
+        notice = "Recording discarded. Nothing was saved."
+        refresh()
+    }
+
+    private func failedSessionIDsCleanup(_ id: String) {
+        writerQueue.async { self.failedSessionIDs.remove(id) }
+    }
+
     func exportSelected() {
-        guard let session = selectedSession, session.status != "recording", session.status != "paused" else { return }
+        guard let session = selectedSession, session.id != draftSession?.id, session.status != "recording", session.status != "paused", !isSaving else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose where to save the demonstration dataset"
         panel.canChooseDirectories = true
@@ -343,7 +461,14 @@ final class RecordingModel: ObservableObject {
         cachedExcel = nil
         clipboardChange = NSPasteboard.general.changeCount
         let bundle = app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
-        if let reason = gate(bundleID: bundle, options: session.options) { suppression = reason; gap(reason); lastBundleID = ""; return }
+        if let reason = gate(bundleID: bundle, options: session.options) {
+            windowGeometryObserver.stop()
+            suppression = reason
+            gap(reason)
+            lastBundleID = ""
+            return
+        }
+        startWindowGeometryObservation(for: app)
         suppression = nil
         lastGap = ""
         guard lastBundleID != bundle else { return }
@@ -362,6 +487,22 @@ final class RecordingModel: ObservableObject {
         return nil
     }
 
+    private func startWindowGeometryObservation(for app: NSRunningApplication?) {
+        guard observesWorkspace, let session = currentSession, !isPaused, !isFinalizing,
+              let app else {
+            windowGeometryObserver.stop()
+            return
+        }
+        let bundle = app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
+        guard bundle != Bundle.main.bundleIdentifier,
+              session.options.allows(bundle),
+              !IsSecureEventInputEnabled() else {
+            windowGeometryObserver.stop()
+            return
+        }
+        windowGeometryObserver.start(app: app)
+    }
+
     private func gap(_ reason: String, timestamp: Double = Date().timeIntervalSince1970) {
         guard let session = currentSession, !isPaused, !isFinalizing, lastGap != reason else { return }
         lastGap = reason
@@ -372,7 +513,7 @@ final class RecordingModel: ObservableObject {
     }
 
     private func flush() {
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty, let draft = draftStore else { return }
         let batch = pending
         let activeBuilder = builder
         let sessionID = batch[0].sessionID
@@ -380,12 +521,12 @@ final class RecordingModel: ObservableObject {
         pending.removeAll(keepingCapacity: true)
         writerQueue.async {
             do {
-                guard !self.failedSessionIDs.contains(sessionID) else { throw TrailError.message("An earlier input batch failed to save") }
+                guard !self.failedSessionIDs.contains(sessionID) else { throw TrailError.message("An earlier input batch could not be retained") }
                 var significant: TrailEvent?
-                try self.store.transaction {
+                try draft.transaction {
                     for event in batch {
-                        let saved = try self.store.append(event)
-                        for action in activeBuilder.consume(saved) { try self.store.append(action) }
+                        let saved = try draft.append(event)
+                        for action in activeBuilder.consume(saved) { try draft.append(action) }
                         if ["mouse_down", "mouse_up", "key_down"].contains(saved.kind) { significant = saved }
                     }
                 }
@@ -404,7 +545,7 @@ final class RecordingModel: ObservableObject {
     }
 
     private func sampleContext(related: TrailEvent? = nil) {
-        guard let session = currentSession, !isPaused, !isFinalizing, let app = NSWorkspace.shared.frontmostApplication else { return }
+        guard observesWorkspace, let session = currentSession, !isPaused, !isFinalizing, let app = NSWorkspace.shared.frontmostApplication else { return }
         let bundle = app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
         guard session.options.allows(bundle), bundle != Bundle.main.bundleIdentifier, !IsSecureEventInputEnabled() else {
             clipboardChange = NSPasteboard.general.changeCount
@@ -457,6 +598,7 @@ final class RecordingModel: ObservableObject {
             guard let self, let session = self.currentSession, session.id == related.sessionID, !self.isPaused,
                   !self.isFinalizing, self.generation == token, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                   self.gate(bundleID: related.bundleID, options: session.options) == nil else { return }
+            guard let draft = self.draftStore else { return }
             guard let data else { self.notice = "Screenshot skipped: \(error ?? "capture unavailable")"; return }
             let relative = "sessions/\(session.id)/frames/\(UUID().uuidString.lowercased()).jpg"
             var event = TrailEvent(sessionID: session.id, kind: "screenshot", app: related.app, bundleID: related.bundleID)
@@ -467,11 +609,8 @@ final class RecordingModel: ObservableObject {
             let saved = event
             self.writerQueue.async {
                 do {
-                    let url = self.store.root.appendingPathComponent(relative)
-                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                    try data.write(to: url, options: .atomic)
-                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-                    _ = try self.store.append(saved)
+                    try draft.writeAttachment(data, relativePath: relative)
+                    _ = try draft.append(saved)
                 } catch {
                     self.failedSessionIDs.insert(session.id)
                     DispatchQueue.main.async { if self.currentSession?.id == session.id { self.fail(error) } }
@@ -481,14 +620,32 @@ final class RecordingModel: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        guard var interrupted = currentSession, let draft = draftStore, !handlingFailure else { return }
+        handlingFailure = true
         input.stop(deliverPending: false)
+        windowGeometryObserver.stop()
         flushTimer?.invalidate()
         contextTimer?.invalidate()
         generation += 1
         pending.removeAll()
-        currentSession = nil
-        isFinalizing = false
+        isFinalizing = true
         isPaused = false
-        errorMessage = "Recording stopped because data could not be saved: \(error.localizedDescription). On next launch, AgentTrail will recover committed events."
+        suppression = nil
+        interrupted.status = "interrupted"
+        interrupted.metadata["capture_error"] = error.localizedDescription
+        let failed = interrupted
+        writerQueue.async {
+            // Preserve committed draft evidence after a failed batch. It still requires explicit Save.
+            try? draft.saveSession(failed)
+            try? draft.rebuildActions(sessionID: failed.id)
+            DispatchQueue.main.async {
+                self.libraryRevision += 1
+                self.draftSession = failed
+                self.currentSession = nil
+                self.isFinalizing = false
+                self.errorMessage = "Recording stopped: \(error.localizedDescription). Nothing was saved. Review the retained draft, then Save recording or Discard."
+                self.refresh()
+            }
+        }
     }
 }

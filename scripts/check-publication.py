@@ -20,6 +20,8 @@ DIRECTORY_SUFFIXES = {
     ".github": {".yml", ".yaml", ".md"},
 }
 REVIEWED_IMAGES = {
+    "Resources/AppIcon.png": "26e6bbd7081bdf09c358b505e90011a0cd02b5746f1d12956d516a73b605acd4",
+    "Resources/AppIcon.icns": "4c5ff7b7cbbb47092f0bffd19734ecd6f6d7692529912d7581f3729e52e510f5",
     "docs/assets/timeline.jpg": "5a4f14bb0f695ffc66e1008bb0dfa57a384166d66410beacdee1d4a616c0792f",
     "docs/assets/cursor-trail.jpg": "d094b2ec22268127a3178f7134e455ed3f62304df0cb5d01573ef997294f6d69",
 }
@@ -44,14 +46,22 @@ def check_blob(name, mode, data, deny_terms=()):
     if name in REVIEWED_IMAGES:
         if mode != "100644":
             problems.append("reviewed image must be a regular non-executable file")
-        if len(data) > 512 * 1024 or not data.startswith(b"\xff\xd8\xff") or not data.endswith(b"\xff\xd9"):
+        if location.suffix == ".jpg":
+            valid_format = len(data) <= 512 * 1024 and data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")
+        elif name == "Resources/AppIcon.png":
+            valid_format = len(data) <= 2 * 1024 * 1024 and data.startswith(b"\x89PNG\r\n\x1a\n") and data.endswith(b"\x00\x00\x00\x00IEND\xaeB`\x82")
+        elif name == "Resources/AppIcon.icns":
+            valid_format = len(data) <= 2 * 1024 * 1024 and data.startswith(b"icns") and len(data) >= 8 and int.from_bytes(data[4:8], "big") == len(data)
+        else:
+            valid_format = False
+        if not valid_format:
             problems.append("unexpected reviewed image format or size")
         if hashlib.sha256(data).hexdigest() != REVIEWED_IMAGES[name]:
             problems.append("image differs from visually reviewed synthetic asset")
         if any(term and term.casefold() in name.casefold() for term in deny_terms):
             problems.append("private review term")
         return problems
-    allowed = name in ROOT_FILES or (
+    allowed = name in ROOT_FILES or name == "docs/app-icon-prompt.txt" or (
         len(location.parts) > 1
         and location.suffix in DIRECTORY_SUFFIXES.get(location.parts[0], set())
         and not any(part.startswith(".") for part in location.parts[1:])
